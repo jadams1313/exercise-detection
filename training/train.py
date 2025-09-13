@@ -28,8 +28,57 @@ class MediaPipeFeatureExtractor:
             min_tracking_confidence=0.5
         )
     
+    def calculate_orientation_from_pose(self, landmarks):
+        """
+        Calculate body orientation (roll, pitch, yaw) from pose landmarks
+        Returns 4D orientation: roll, pitch, yaw, confidence
+        """
+        try:
+            # Key points for orientation calculation
+            left_shoulder = np.array([landmarks[11].x, landmarks[11].y, landmarks[11].z])
+            right_shoulder = np.array([landmarks[12].x, landmarks[12].y, landmarks[12].z])
+            left_hip = np.array([landmarks[23].x, landmarks[23].y, landmarks[23].z])
+            right_hip = np.array([landmarks[24].x, landmarks[24].y, landmarks[24].z])
+            
+            # Calculate shoulder and hip midpoints
+            shoulder_center = (left_shoulder + right_shoulder) / 2
+            hip_center = (left_hip + right_hip) / 2
+            
+            # Calculate orientation vectors
+            # Torso vector (vertical axis)
+            torso_vector = shoulder_center - hip_center
+            torso_vector = torso_vector / (np.linalg.norm(torso_vector) + 1e-8)
+            
+            # Shoulder vector (horizontal axis)
+            shoulder_vector = right_shoulder - left_shoulder
+            shoulder_vector = shoulder_vector / (np.linalg.norm(shoulder_vector) + 1e-8)
+            
+            # Forward vector (perpendicular to both)
+            forward_vector = np.cross(torso_vector, shoulder_vector)
+            forward_vector = forward_vector / (np.linalg.norm(forward_vector) + 1e-8)
+            
+            # Create rotation matrix
+            rotation_matrix = np.column_stack([shoulder_vector, forward_vector, torso_vector])
+            
+            # Convert to Euler angles (roll, pitch, yaw)
+            rotation = R.from_matrix(rotation_matrix)
+            euler_angles = rotation.as_euler('xyz', degrees=True)  # roll, pitch, yaw
+            
+            # Calculate confidence based on landmark visibility
+            visibility_scores = [
+                landmarks[11].visibility, landmarks[12].visibility,
+                landmarks[23].visibility, landmarks[24].visibility
+            ]
+            confidence = np.mean(visibility_scores)
+            
+            return np.array([euler_angles[0], euler_angles[1], euler_angles[2], confidence])
+            
+        except Exception as e:
+            # Return zero orientation with low confidence if calculation fails
+            return np.array([0.0, 0.0, 0.0, 0.0])
+    
     def extract_video_features(self, video_path):
-        """Extract (x,y) coordinates for all 33 keypoints per frame"""
+        """Extract 3D coordinates (x,y,z) + orientation (roll,pitch,yaw,conf) per frame"""
         cap = cv2.VideoCapture(video_path)
         frame_features = []
         
@@ -43,11 +92,17 @@ class MediaPipeFeatureExtractor:
             results = self.pose.process(rgb_frame)
             
             if results.pose_landmarks:
-                # Extract (x,y) coordinates for 33 keypoints = 66 features
+                # Extract 3D coordinates for 33 keypoints = 99 features
                 coords = []
                 for landmark in results.pose_landmarks.landmark:
-                    coords.extend([landmark.x, landmark.y])
-                frame_features.append(coords)
+                    coords.extend([landmark.x, landmark.y, landmark.z])
+                
+                # Extract orientation (roll, pitch, yaw, confidence) = 4 features
+                orientation = self.calculate_orientation_from_pose(results.pose_landmarks.landmark)
+                
+                # Combine: 99 + 4 = 103 features per frame
+                frame_feature = coords + orientation.tolist()
+                frame_features.append(frame_feature)
         
         cap.release()
         return np.array(frame_features)
@@ -360,8 +415,7 @@ if __name__ == "__main__":
     print("Following the exact methodology from the paper")
     print("'MediaPipe with GNN for Human Activity Recognition'")
     # Check for videos
-    raw_videos_path = kagglehub.dataset_download("riccardoriccio/real-time-exercise-recognition-dataset/final_kaggle_with_additional_video")
-
+    
     total_videos = 0
     for exercise_folder in raw_videos_path.iterdir():
         if exercise_folder.is_dir():
