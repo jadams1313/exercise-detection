@@ -15,7 +15,7 @@ def import_data(path: str = "data/raw_videos"):
     """
     try:
         
-        print(f"Dataset downloaded to: {raw_videos_path}")
+        print(f"Dataset downloaded to: {path}")
         
         # Create target directory
         target_path = Path(path)

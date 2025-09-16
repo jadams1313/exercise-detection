@@ -11,6 +11,7 @@ import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
@@ -107,10 +108,9 @@ class MediaPipeFeatureExtractor:
         cap.release()
         return np.array(frame_features)
     
-    def process_dataset(self, dataset_path="exercise_dataset"):
+    def process_dataset(self, dataset_path):
         """Process all videos and create CSV"""
-        dataset_path = Path(dataset_path)
-        raw_videos_path = dataset_path / "raw_videos"
+        dataset_path = dataset_path
         
         all_data = []
         exercise_to_id = {}
@@ -118,7 +118,7 @@ class MediaPipeFeatureExtractor:
         
         print("Processing dataset videos...")
         
-        for exercise_folder in raw_videos_path.iterdir():
+        for exercise_folder in dataset_path.iterdir():
             if not exercise_folder.is_dir():
                 continue
             
@@ -151,7 +151,7 @@ class MediaPipeFeatureExtractor:
                 except Exception as e:
                     print(f"    Error processing {video_file.name}: {e}")
         
-        columns = ['video_id'] + [f'kp_{i//2}_{["x","y"][i%2]}' for i in range(66)] + ['class']
+        columns = ['video_id'] + [f'kp_{i//3}_{["x","y","z"][i%3]}' for i in range(99)] + ['orientation_roll', 'orientation_pitch', 'orientation_yaw', 'orientation_confidence'] + ['class']
         df = pd.DataFrame(all_data, columns=columns)
         
         # Save CSV
@@ -164,59 +164,95 @@ class MediaPipeFeatureExtractor:
         
         return df, exercise_to_id
 
-class VideoGraphDataset:
-    """Convert CSV data to graph format"""
+class VideoGraphDataset(torch.utils.data.Dataset):
+    """Dataset that converts CSV pose data to graphs"""
     
     def __init__(self, csv_path, exercise_to_label):
-        self.df = pd.read_csv(csv_path)
+        self.csv_path = csv_path
         self.exercise_to_label = exercise_to_label
-        self.label_to_exercise = {v: k for k, v in exercise_to_label.items()}
         
-        # Group by video_id to create graphs
-        self.video_groups = self.df.groupby('video_id')
-        self.video_ids = list(self.video_groups.groups.keys())
+        # Load the CSV data
+        self.df = pd.read_csv(csv_path)
+        self.video_ids = self.df['video_id'].unique()
+        
+        print(f"Loaded {len(self.video_ids)} unique videos")
         
     def __len__(self):
         return len(self.video_ids)
     
     def __getitem__(self, idx):
         video_id = self.video_ids[idx]
-        video_data = self.video_groups.get_group(video_id)
         
-        # Extract node features (66 coordinates per frame)
-        feature_cols = [col for col in self.df.columns if col.startswith('kp_')]
-        node_features = video_data[feature_cols].values.astype(np.float32)
+        # Get all frames for this video
+        video_frames = self.df[self.df['video_id'] == video_id]
         
-        # Create sequential edges (frame i -> frame i+1)
-        num_frames = len(node_features)
-        edge_index = []
+        # Extract features (excluding video_id and class columns)
+        feature_cols = [col for col in self.df.columns if col not in ['video_id', 'class']]
+        pose_features = video_frames[feature_cols].values.astype(np.float32)
         
-        # Sequential connections between frames
-        for i in range(num_frames - 1):
-            edge_index.append([i, i + 1])
-            edge_index.append([i + 1, i])  # Bidirectional
+        # Get label
+        exercise_class = video_frames['class'].iloc[0]
+        label = self.exercise_to_label[exercise_class]
         
-        # Convert to tensor format
-        if len(edge_index) > 0:
-            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-        else:
-            # Single frame video - self connection
-            edge_index = torch.tensor([[0], [0]], dtype=torch.long)
+        # Convert to graph format
+        node_features, edge_index = self.create_pose_graph(pose_features)
         
-        exercise_name = video_data['class'].iloc[0]
-        label = self.exercise_to_label[exercise_name]
-        graph = Data(
-            x=torch.tensor(node_features, dtype=torch.float),
+        # Create PyTorch Geometric Data object
+        data = Data(
+            x=node_features,
             edge_index=edge_index,
             y=torch.tensor(label, dtype=torch.long)
         )
         
-        return graph
+        return data
+    
+    def create_pose_graph(self, pose_features):
+        """Convert pose sequence to graph"""
+        # pose_features shape: [num_frames, 103]
+        
+        # Extract coordinates (first 99 features: 33 keypoints × 3)
+        coords = pose_features[:, :99].reshape(-1, 33, 3)  # [frames, keypoints, xyz]
+        orientation = pose_features[:, 99:]  # [frames, 4] - orientation features
+        
+        # Average across frames for single graph representation
+        avg_coords = coords.mean(axis=0)  # [33, 3]
+        avg_orientation = orientation.mean(axis=0)  # [4]
+        
+        # Each node gets coordinates + global orientation info
+        orientation_repeated = np.tile(avg_orientation, (33, 1))  # [33, 4]
+        node_features = np.concatenate([avg_coords, orientation_repeated], axis=1)  # [33, 7]
+        
+        # Create edges based on human pose skeleton
+        edge_connections = [
+            # Head connections
+            (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8),
+            # Torso
+            (9, 10), (11, 12), (11, 23), (12, 24), (23, 24),
+            # Left arm
+            (11, 13), (13, 15), (15, 17), (15, 19), (15, 21), (17, 19),
+            # Right arm
+            (12, 14), (14, 16), (16, 18), (16, 20), (16, 22), (18, 20),
+            # Left leg
+            (23, 25), (25, 27), (27, 29), (27, 31), (29, 31),
+            # Right leg
+            (24, 26), (26, 28), (28, 30), (28, 32), (30, 32)
+        ]
+        
+        # Convert to edge_index format (bidirectional)
+        edges = []
+        for src, dst in edge_connections:
+            if src < 33 and dst < 33:  # Valid keypoint indices
+                edges.append([src, dst])
+                edges.append([dst, src])  # Bidirectional
+        
+        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        
+        return torch.tensor(node_features, dtype=torch.float32), edge_index
 
 class ExerciseGNN(nn.Module):
     """Graph Neural Network classfier"""
     
-    def __init__(self, num_features=66, hidden_dim=128, num_classes=3):
+    def __init__(self, num_features=103, hidden_dim=128, num_classes=5):
         super().__init__()
         
         self.conv1 = GCNConv(num_features, hidden_dim)
@@ -257,11 +293,11 @@ class ExerciseGNN(nn.Module):
 class ExerciseTrainer:
     """Training pipeline following paper's methodology"""
     
-    def __init__(self, dataset_path="exercise_dataset"):
+    def __init__(self, dataset_path):
         self.dataset_path = Path(dataset_path)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-    def train(self):
+    def posing(self):
         print("=== Exercise Recognition Training (Paper Method) ===\n")
         
         # Step 1: Extract features using MediaPipe
@@ -285,8 +321,10 @@ class ExerciseTrainer:
         print("\nStep 2: Creating graph dataset...")
         dataset = VideoGraphDataset(csv_path, exercise_to_label)
         print(f"Created {len(dataset)} video graphs")
+        return dataset, exercise_to_label
         
-        # Step 3: Train-test split
+    def split_dataset(self, dataset, test_size=0.2, random_state=42):
+         # Step 3: Train-test split
         train_size = int(0.8 * len(dataset))
         test_size = len(dataset) - train_size
         
@@ -302,10 +340,14 @@ class ExerciseTrainer:
         print(f"Train videos: {len(train_dataset)}")
         print(f"Test videos: {len(test_dataset)}")
         
+        return train_loader, test_loader, exercise_to_label
+    
+
+    def train(self, train_loader, test_loader, exercise_to_label):
         # Step 4: Initialize model
         print(f"\nStep 3: Initializing GNN model...")
         model = ExerciseGNN(
-            num_features=66,  # 33 keypoints * 2 (x,y)
+            num_features=7,  # 33 keypoints * 3 (x,y,z) + 4 orientation features (roll,pitch,yaw,confidence)
             hidden_dim=128,
             num_classes=len(exercise_to_label)
         ).to(self.device)
@@ -316,9 +358,9 @@ class ExerciseTrainer:
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print(f"Training on: {self.device}")
         
-        # Step 5: Training loop (following paper's hyperparameters)
+        # Step 5: Training loop 
         print("\nStep 4: Training model...")
-        epochs = 200  # As in paper
+        epochs = 200  
         
         train_losses = []
         train_accuracies = []
@@ -408,31 +450,48 @@ class ExerciseTrainer:
         return model, exercise_to_label, accuracy
 
 
-
 if __name__ == "__main__":
-    dataset_path = "../data/raw"
     print("=== MediaPipe + GNN Exercise Recognition ===")
     print("Following the exact methodology from the paper")
     print("'MediaPipe with GNN for Human Activity Recognition'")
-    # Check for videos
     
+    # Define the path to your exercise videos
+    
+    rawpath = r"C:\Users\User\.cache\kagglehub\datasets\data\exercise-videos\real-time-exercise-recognition-dataset\versions\1.0.0\training-data"
+    path = Path(rawpath)
+    # Check for videos and collect exercise types
     total_videos = 0
-    for exercise_folder in raw_videos_path.iterdir():
-        if exercise_folder.is_dir():
-            video_count = len(list(exercise_folder.glob("*.mp4")))
-            total_videos += video_count
-            print(f"  {exercise_folder.name}: {video_count} videos")
+    exercise_types = []
     
-    if total_videos > 0:
-        print(f"\nFound {total_videos} total videos. Starting training...")
-        trainer = ExerciseTrainer(dataset_path)
-        model, exercise_mapping, accuracy = trainer.train()
+    print("\nScanning for exercise videos:")
+    for exercise_folder in path.iterdir():
+        if exercise_folder.is_dir():
+            # Count videos in this exercise folder
+            video_files = list(exercise_folder.glob("*.mp4"))
+            video_count = len(video_files)
+            
+            if video_count > 0:
+                total_videos += video_count
+                exercise_types.append(exercise_folder.name)
+                print(f"  {exercise_folder.name}: {video_count} videos")
+            else:
+                print(f"  {exercise_folder.name}: No MP4 videos found")
+    
+    print(f"\nFound {total_videos} total videos across {len(exercise_types)} exercise types:")
+    print(f"Exercise types: {', '.join(exercise_types)}")
+    print(f"\nStarting training on all videos...")
+    
+    # Use the correct path for training - this should be the parent directory containing all exercise folders
+    trainer = ExerciseTrainer(rawpath) 
+    #dataset, exercise_to_label = trainer.posing()
+    csv_path = r"C:\Users\User\.cache\kagglehub\datasets\data\exercise-videos\real-time-exercise-recognition-dataset\versions\1.0.0\training-data\processed\pose_features.csv"
+    exercise_to_label = {"barbell biceps curl": 0, "hammer curl":1, "push-up": 2, "shoulder press":3, "squat":4}
+    dataset = VideoGraphDataset(csv_path, exercise_to_label)
+    train_loader, test_loader, exercise_to_label = trainer.split_dataset(dataset)
+    model, exercise_mapping, accuracy = trainer.train(train_loader, test_loader, exercise_to_label)
+    
+    print(f"\nTraining completed!")
+    print(f"Final accuracy: {accuracy*100:.2f}%")
+    print(f"Exercise mapping: {exercise_mapping}")
+    print(f"Model saved for API usage")
         
-        print(f"\n Training completed!")
-        print(f" Final accuracy: {accuracy*100:.2f}%")
-
-        print(f" Model saved for API usage")
-        
-    else:
-        print(f"\n  No videos found. Please add MP4 files to the exercise folders.")
-        print("Example: exercise_dataset/raw_videos/squats/squat_001.mp4")
