@@ -12,7 +12,7 @@
     </parent>
 
     <groupId>com.github</groupId>
-    <artifactId>exercise-detection-processing</artifactId>
+    <artifactId>exercise</artifactId>
     <version>1.0.0</version>
 
     <properties>
@@ -141,6 +141,12 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>2.41.10</version>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
     <build>

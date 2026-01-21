@@ -1,4 +1,4 @@
-package com.github.service;
+package com.github.exercise.service;
 
 public class VideoProcessingService {
 }
