@@ -4,9 +4,10 @@ import com.github.exercise.client.VideoAnalysisClient;
 import com.github.exercise.data.Exercise;
 import com.github.exercise.data.ExerciseAnalysis;
 import  com.github.exercise.data.VideoUpload;
-import  com.github.exercise.constants.AnalysisStatus;
+import com.github.exercise.data.User;
 import com.github.exercise.dto.VideoAnalysisResponse;
 import  com.github.exercise.repositories.ExerciseAnalysisRepository;
+import com.github.exercise.repositories.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -25,6 +26,7 @@ public class ExerciseAnalysisService implements AnalysisService {
     private final ExerciseAnalysisRepository analysisRepository;
     private final VideoAnalysisClient videoAnalysisClient;
     private final FileStorageService fileStorageService;
+    private final UserRepository userRepository;
 
     @Async
     @Transactional
@@ -74,5 +76,12 @@ public class ExerciseAnalysisService implements AnalysisService {
     public ExerciseAnalysis getAnalysisById(Long analysisId) {
         return analysisRepository.findById(analysisId)
                 .orElseThrow(() -> new RuntimeException("Analysis not found: " + analysisId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ExerciseAnalysis> getAnalysesByUsername(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found: " + username));
+        return analysisRepository.findByVideoUploadUserId(user.getId());
     }
 }
