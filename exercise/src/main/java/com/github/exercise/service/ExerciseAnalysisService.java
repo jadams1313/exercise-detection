@@ -1,6 +1,7 @@
 package com.github.exercise.service;
 
 import com.github.exercise.client.VideoAnalysisClient;
+import com.github.exercise.data.Exercise;
 import com.github.exercise.data.ExerciseAnalysis;
 import  com.github.exercise.data.VideoUpload;
 import  com.github.exercise.constants.AnalysisStatus;
@@ -33,26 +34,26 @@ public class ExerciseAnalysisService implements AnalysisService {
         ExerciseAnalysis analysis = new ExerciseAnalysis();
         analysis.setVideoUpload(videoUpload);
         analysis.setAnalysisTimestamp(LocalDateTime.now());
-
         analysis = analysisRepository.save(analysis);
 
         try {
             // Get video from S3 and send to ML model
             VideoAnalysisResponse response = videoAnalysisClient.analyzeVideo(videoUpload.getFilename());
-
-            analysis.setExerciseType(response.getExerciseType());
-            analysis.setRepCount(response.getRepCount());
+            final Exercise exerciseClassificationResponse = new Exercise();
+            exerciseClassificationResponse.setType(response.getExerciseType());
+            analysis.setExerciseType(exerciseClassificationResponse);
+            analysis.setRepsPerformed(response.getRepCount());
             analysis.setConfidence(response.getConfidence());
-            analysis.setStatus(AnalysisStatus.COMPLETED);
-            analysis.setCompletedAt(LocalDateTime.now());
+//          analysis.setStatus(AnalysisStatus.COMPLETED); do we need this?
+            analysis.setAnalysisTimestamp(LocalDateTime.now());
 
             log.info("Analysis completed for video: {} - Type: {}, Reps: {}",
                     videoUpload.getId(), response.getExerciseType(), response.getRepCount());
 
         } catch (Exception e) {
             log.error("Analysis failed for video: {}", videoUpload.getId(), e);
-            analysis.setStatus(AnalysisStatus.FAILED);
-            analysis.setErrorMessage(e.getMessage());
+    //        analysis.setStatus(AnalysisStatus.FAILED);
+    //        analysis.setErrorMessage(e.getMessage());
         }
 
         analysisRepository.save(analysis);

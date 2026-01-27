@@ -37,10 +37,9 @@ public class VideoAnalysisClient {
         byte[] videoBytes = videoStream.readAllBytes();
         String base64Video = Base64.getEncoder().encodeToString(videoBytes);
 
-        VideoAnalysisRequest request = VideoAnalysisRequest.builder()
-                .videoData(base64Video)
-                .fileName(fileName)
-                .build();
+        VideoAnalysisRequest request = VideoAnalysisRequest();
+        request.setVideoData(base64Video);
+        request.setFileName(fileName);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

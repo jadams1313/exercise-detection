@@ -3,21 +3,21 @@ package com.github.exercise.service;
 import com.github.exercise.constants.VideoStatus;
 import com.github.exercise.data.User;
 import com.github.exercise.data.VideoUpload;
-import com.github.exercise.repositories.VideoUploadRepo;
+import com.github.exercise.repositories.VideoUploadRepository;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import com.exercise.app.service.FileStorageService;
+import com.github.exercise.service.FileStorageService;
 
 import java.io.IOException;
 import java.util.List;
 
 public class VideoUploadService {
-    private final VideoUploadRepo videoUploadRepository;
+    private final VideoUploadRepository videoUploadRepository;
     private final FileStorageService fileStorageService;
     private final ExerciseAnalysisService exerciseAnalysisService;
 
     public VideoUploadService(
-            VideoUploadRepo videoUploadRepository,
+            VideoUploadRepository videoUploadRepository,
             FileStorageService fileStorageService,
             ExerciseAnalysisService exerciseAnalysisService) {
         this.videoUploadRepository = videoUploadRepository;
@@ -56,8 +56,8 @@ public class VideoUploadService {
         return saved;
     }
 
-    public List<VideoUpload> getUserVideos(User user) {
-        return videoUploadRepository.findByUserOrderByUploadedAtDesc(user);
+    public List<VideoUpload> getAllUserVideos(User user) {
+        return videoUploadRepository.getAllUserVideos(user);
     }
 
     public List<VideoUpload> getPendingVideos() {

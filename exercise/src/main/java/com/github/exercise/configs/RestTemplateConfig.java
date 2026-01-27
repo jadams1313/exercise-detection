@@ -7,7 +7,7 @@ import org.springframework.web.client.RestTemplate;
 import java.time.Duration;
 
 public class RestTemplateConfig {
-    @Value("${ml.api.timeout:300000}")
+    @Value("${video.analysis.api.timeout:300000}")
     private int timeout;
 
     @Bean

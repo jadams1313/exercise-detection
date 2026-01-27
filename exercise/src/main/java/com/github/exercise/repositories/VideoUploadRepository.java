@@ -1,5 +1,7 @@
 package com.github.exercise.repositories;
 
+import com.github.exercise.client.VideoAnalysisClient;
+import com.github.exercise.data.User;
 import com.github.exercise.data.VideoUpload;
 import com.github.exercise.constants.VideoStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -17,4 +19,6 @@ public interface VideoUploadRepository extends JpaRepository<VideoUpload, Long> 
     List<VideoUpload> findByStatus(VideoStatus status);
 
     long countByUserId(Long userId);
+
+    List<VideoUpload> getAllUserVideos(User user);
 }

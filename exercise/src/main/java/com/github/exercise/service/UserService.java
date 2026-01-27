@@ -1,22 +1,22 @@
 package com.github.exercise.service;
 
 import com.github.exercise.data.User;
-import com.github.exercise.repositories.UserRepo;
+import com.github.exercise.repositories.UserRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
 
 public class UserService {
-    private final UserRepo userRepo;
+    private final UserRepository userRepo;
     private final PasswordEncoder passwordEncoder;
 
-    public UserService(final UserRepo userRepo, final PasswordEncoder passwordEncoder) {
+    public UserService(final UserRepository userRepo, final PasswordEncoder passwordEncoder) {
         this.userRepo = userRepo;
         this.passwordEncoder = passwordEncoder;
     }
 
     public User registerUser(final String userName, final String email, final String rawPassword) {
-        if (userRepo.existsByUserName(userName)) {
+        if (userRepo.existsByUsername(userName)) {
             throw new IllegalArgumentException("Username already exists");
         }
         if (userRepo.existsByEmail(email)) {
