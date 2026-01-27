@@ -1,15 +1,77 @@
 package com.github.exercise.service;
 
-import com.github.exercise.data.Excercise;
-import org.springframework.web.client.RestClient;
+import com.github.exercise.client.VideoAnalysisClient;
+import com.github.exercise.data.ExerciseAnalysis;
+import  com.github.exercise.data.VideoUpload;
+import  com.github.exercise.constants.AnalysisStatus;
+import com.github.exercise.dto.VideoAnalysisResponse;
+import  com.github.exercise.repositories.ExerciseAnalysisRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-public class ExerciseAnalysisService implements AnalysisService{
+import java.time.LocalDateTime;
+import java.util.List;
 
-    public ExerciseAnalysisService() {};
+import static reactor.netty.http.HttpConnectionLiveness.log;
 
-    public Excercise classifyExercise() {
-        RestClient videoClassificationClient = new RestClient();
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class ExerciseAnalysisService implements AnalysisService {
+    private final ExerciseAnalysisRepository analysisRepository;
+    private final VideoAnalysisClient videoAnalysisClient;
+    private final FileStorageService fileStorageService;
 
-        //extend request to mL model api.
+    @Async
+    @Transactional
+    public void analyzeVideoAsync(VideoUpload videoUpload) {
+        log.info("Starting async analysis for video: {}", videoUpload.getId());
+
+        ExerciseAnalysis analysis = new ExerciseAnalysis();
+        analysis.setVideoUpload(videoUpload);
+        analysis.setAnalysisTimestamp(LocalDateTime.now());
+
+        analysis = analysisRepository.save(analysis);
+
+        try {
+            // Get video from S3 and send to ML model
+            VideoAnalysisResponse response = videoAnalysisClient.analyzeVideo(videoUpload.getFilename());
+
+            analysis.setExerciseType(response.getExerciseType());
+            analysis.setRepCount(response.getRepCount());
+            analysis.setConfidence(response.getConfidence());
+            analysis.setStatus(AnalysisStatus.COMPLETED);
+            analysis.setCompletedAt(LocalDateTime.now());
+
+            log.info("Analysis completed for video: {} - Type: {}, Reps: {}",
+                    videoUpload.getId(), response.getExerciseType(), response.getRepCount());
+
+        } catch (Exception e) {
+            log.error("Analysis failed for video: {}", videoUpload.getId(), e);
+            analysis.setStatus(AnalysisStatus.FAILED);
+            analysis.setErrorMessage(e.getMessage());
+        }
+
+        analysisRepository.save(analysis);
+    }
+
+    @Transactional(readOnly = true)
+    public ExerciseAnalysis getAnalysisByVideoId(Long videoId) {
+        return analysisRepository.findByVideoUploadId(videoId)
+                .orElseThrow(() -> new RuntimeException("Analysis not found for video: " + videoId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ExerciseAnalysis> getAnalysesByUserId(Long userId) {
+        return analysisRepository.findByVideoUploadUserId(userId);
+    }
+
+    @Transactional(readOnly = true)
+    public ExerciseAnalysis getAnalysisById(Long analysisId) {
+        return analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("Analysis not found: " + analysisId));
     }
 }

@@ -3,7 +3,6 @@ package com.github.exercise.data;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
-import org.springframework.data.annotation.CreatedDate;
 
 import java.time.LocalDateTime;
 
@@ -13,7 +12,7 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ExcerciseAnalysis {
+public class ExerciseAnalysis {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -29,7 +28,7 @@ public class ExcerciseAnalysis {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "exercise_id", nullable = true)
-    private Excercise exerciseType;
+    private Exercise exerciseType;
 
     @Column(nullable = true)
     private Integer repsPerformed;
@@ -67,11 +66,11 @@ public class ExcerciseAnalysis {
         this.user = user;
     }
 
-    public Excercise getExerciseType() {
+    public Exercise getExerciseType() {
         return exerciseType;
     }
 
-    public void setExerciseType(Excercise exerciseType) {
+    public void setExerciseType(Exercise exerciseType) {
         this.exerciseType = exerciseType;
     }
 

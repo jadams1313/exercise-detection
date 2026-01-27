@@ -6,6 +6,7 @@ import com.github.exercise.data.VideoUpload;
 import com.github.exercise.repositories.VideoUploadRepo;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import com.exercise.app.service.FileStorageService;
 
 import java.io.IOException;
 import java.util.List;
@@ -42,9 +43,9 @@ public class VideoUploadService {
         // Create video upload record
         VideoUpload videoUpload = new VideoUpload();
         videoUpload.setUser(user);
-        videoUpload.setFileName(file.getOriginalFilename());
+        videoUpload.setFilename(file.getOriginalFilename());
         videoUpload.setFileUrl(fileUrl);
-        videoUpload.setFileSize(file.getSize());
+        videoUpload.setFileSizeBytes(file.getSize());
         videoUpload.setStatus(VideoStatus.PROCESSING);
 
         VideoUpload saved = videoUploadRepository.save(videoUpload);
@@ -69,9 +70,6 @@ public class VideoUploadService {
                 .orElseThrow(() -> new IllegalArgumentException("Video not found"));
 
         video.setStatus(status);
-        if (errorMessage != null) {
-            video.setErrorMessage(errorMessage);
-        }
 
         videoUploadRepository.save(video);
     }
