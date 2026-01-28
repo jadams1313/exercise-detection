@@ -28,7 +28,7 @@ public class ExerciseAnalysis {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "exercise_id", nullable = true)
-    private Exercise exerciseType;
+    private Exercise exercise;
 
     @Column(nullable = true)
     private Integer repsPerformed;
@@ -67,11 +67,11 @@ public class ExerciseAnalysis {
     }
 
     public Exercise getExerciseType() {
-        return exerciseType;
+        return exercise;
     }
 
-    public void setExerciseType(Exercise exerciseType) {
-        this.exerciseType = exerciseType;
+    public void setExerciseType(Exercise exercise) {
+        this.exercise = exercise;
     }
 
     public Integer getRepsPerformed() {

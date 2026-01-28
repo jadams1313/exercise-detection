@@ -4,6 +4,7 @@ import com.github.exercise.constants.VideoStatus;
 import com.github.exercise.data.User;
 import com.github.exercise.data.VideoUpload;
 import com.github.exercise.repositories.VideoUploadRepository;
+import com.github.exercise.util.S3Util;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import com.github.exercise.service.FileStorageService;
@@ -72,5 +73,33 @@ public class VideoUploadService {
         video.setStatus(status);
 
         videoUploadRepository.save(video);
+    }
+    // Add these methods to VideoUploadService class
+
+    public VideoUpload getVideoById(Long videoId, Long userId) {
+        VideoUpload videoUpload = videoUploadRepository.findById(videoId)
+                .orElseThrow(() -> new RuntimeException("Video not found with id: " + videoId));
+
+        // Ensure the video belongs to the requesting user
+        if (!videoUpload.getUser().getId().equals(userId)) {
+            throw new RuntimeException("Unauthorized access to video");
+        }
+
+        return videoUpload;
+    }
+
+    public void deleteVideo(Long videoId, Long userId) {
+        VideoUpload videoUpload = getVideoById(videoId, userId);
+
+        try {
+            // Delete from S3
+            fileStorageService.deleteFile(videoUpload.getFilename());
+
+            // Delete from database
+            videoUploadRepository.delete(videoUpload);
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to delete video", e);
+        }
     }
 }

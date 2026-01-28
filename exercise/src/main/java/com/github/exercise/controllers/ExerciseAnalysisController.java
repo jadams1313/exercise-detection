@@ -1,5 +1,6 @@
 package com.github.exercise.controllers;
 
+import com.github.exercise.data.VideoUpload;
 import com.github.exercise.dto.AnalysisResponse;
 import com.github.exercise.data.ExerciseAnalysis;
 import com.github.exercise.service.ExerciseAnalysisService;
@@ -25,10 +26,12 @@ public class ExerciseAnalysisController {
             @PathVariable Long videoId,
             Authentication authentication) {
 
-        String username = authentication.getName();
-        // Verify user owns the video
-        videoUploadService.getVideoById(videoId, username);
+        Long userId = Long.parseLong(authentication.getName());
 
+        // Verify user owns the video (throws exception if not)
+        videoUploadService.getVideoById(videoId, userId);
+
+        // Get the analysis for this video
         ExerciseAnalysis analysis = analysisService.getAnalysisByVideoId(videoId);
         AnalysisResponse response = mapToResponse(analysis);
 
@@ -40,22 +43,24 @@ public class ExerciseAnalysisController {
             @PathVariable Long analysisId,
             Authentication authentication) {
 
+        Long userId = Long.parseLong(authentication.getName());
         ExerciseAnalysis analysis = analysisService.getAnalysisById(analysisId);
 
-        // Verify user owns the video
-        String username = authentication.getName();
-        videoUploadService.getVideoById(analysis.getVideoUpload().getId(), username);
+        // Verify user owns the video associated with this analysis
+        videoUploadService.getVideoById(analysis.getVideoUpload().getId(), userId);
 
         AnalysisResponse response = mapToResponse(analysis);
         return ResponseEntity.ok(response);
     }
 
     @GetMapping("/user")
-    public ResponseEntity<List<AnalysisResponse>> getUserAnalyses(Authentication authentication) {
-        String username = authentication.getName();
+    public ResponseEntity<List<AnalysisResponse>> getUserAnalyses(
+            Authentication authentication) {
 
-        // Get user's analyses through service (we need to add this method)
-        List<ExerciseAnalysis> analyses = analysisService.getAnalysesByUsername(username);
+        Long userId = Long.parseLong(authentication.getName());
+
+        // Get all analyses for this user
+        List<ExerciseAnalysis> analyses = analysisService.getAnalysesByUserId(userId);
 
         List<AnalysisResponse> responses = analyses.stream()
                 .map(this::mapToResponse)
@@ -65,16 +70,13 @@ public class ExerciseAnalysisController {
     }
 
     private AnalysisResponse mapToResponse(ExerciseAnalysis analysis) {
-        return AnalysisResponse.builder()
-                .id(analysis.getId())
-                .videoId(analysis.getVideoUpload().getId())
-                .exerciseType(analysis.getExerciseType())
-                .repCount(analysis.getRepCount())
-                .confidence(analysis.getConfidence())
-                .status(analysis.getStatus())
-                .createdAt(analysis.getCreatedAt())
-                .completedAt(analysis.getCompletedAt())
-                .errorMessage(analysis.getErrorMessage())
-                .build();
+        AnalysisResponse response = new AnalysisResponse();
+        response.setId(analysis.getId());
+        response.setVideoId(analysis.getVideoUpload().getId());
+        response.setExercise(analysis.getExerciseType());
+        response.setRepCount(analysis.getRepsPerformed());
+        response.setConfidence(analysis.getConfidence());
+        response.setCreatedAt(analysis.getAnalysisTimestamp());
+        return response;
     }
 }
