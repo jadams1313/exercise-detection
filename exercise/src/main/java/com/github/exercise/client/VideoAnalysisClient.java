@@ -14,19 +14,21 @@ import org.springframework.web.client.RestTemplate;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Base64;
+
 import static reactor.netty.http.HttpConnectionLiveness.log;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class VideoAnalysisClient {
+
     private final RestTemplate restTemplate;
     private final FileStorageService fileStorageService;
 
     @Value("${video.analysis.api.url}")
     private String videoAnalysisApi;
 
-    @Value("${video.analysis.api.timeout:300000}") // 5 minutes default
+    @Value("${video.analysis.api.timeout:300000}")
     private int timeout;
 
     public VideoAnalysisResponse analyzeVideo(String fileName) throws IOException {
@@ -37,7 +39,8 @@ public class VideoAnalysisClient {
         byte[] videoBytes = videoStream.readAllBytes();
         String base64Video = Base64.getEncoder().encodeToString(videoBytes);
 
-        VideoAnalysisRequest request = VideoAnalysisRequest();
+        // Fixed instantiation
+        VideoAnalysisRequest request = new VideoAnalysisRequest();
         request.setVideoData(base64Video);
         request.setFileName(fileName);
 
