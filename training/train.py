@@ -1,11 +1,11 @@
-import mediapipe as mp
+from mediapipe.python.solutions import pose as mp_pose
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_mean_pool
-from torch_geometric.data import Data, DataLoader
+from torch_geometric.data import Data, Batch
 import os
 import pandas as pd
 from pathlib import Path
@@ -15,11 +15,10 @@ from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
-import kagglehub
 
 
 class MediaPipeFeatureExtractor:
-    """Extract pose coordinates using MediaPipe"""
+    """Extract pose coordinates using MediaPipe - same as before"""
     
     def __init__(self):
         self.mp_pose = mp.solutions.pose
@@ -30,42 +29,29 @@ class MediaPipeFeatureExtractor:
         )
     
     def calculate_orientation_from_pose(self, landmarks):
-        """
-        Calculate body orientation (roll, pitch, yaw) from pose landmarks
-        Returns 4D orientation: roll, pitch, yaw, confidence
-        """
+        """Calculate body orientation (roll, pitch, yaw) from pose landmarks"""
         try:
-            # Key points for orientation calculation
             left_shoulder = np.array([landmarks[11].x, landmarks[11].y, landmarks[11].z])
             right_shoulder = np.array([landmarks[12].x, landmarks[12].y, landmarks[12].z])
             left_hip = np.array([landmarks[23].x, landmarks[23].y, landmarks[23].z])
             right_hip = np.array([landmarks[24].x, landmarks[24].y, landmarks[24].z])
             
-            # Calculate shoulder and hip midpoints
             shoulder_center = (left_shoulder + right_shoulder) / 2
             hip_center = (left_hip + right_hip) / 2
             
-            # Calculate orientation vectors
-            # Torso vector (vertical axis)
             torso_vector = shoulder_center - hip_center
             torso_vector = torso_vector / (np.linalg.norm(torso_vector) + 1e-8)
             
-            # Shoulder vector (horizontal axis)
             shoulder_vector = right_shoulder - left_shoulder
             shoulder_vector = shoulder_vector / (np.linalg.norm(shoulder_vector) + 1e-8)
             
-            # Forward vector (perpendicular to both)
             forward_vector = np.cross(torso_vector, shoulder_vector)
             forward_vector = forward_vector / (np.linalg.norm(forward_vector) + 1e-8)
             
-            # Create rotation matrix
             rotation_matrix = np.column_stack([shoulder_vector, forward_vector, torso_vector])
-            
-            # Convert to Euler angles (roll, pitch, yaw)
             rotation = R.from_matrix(rotation_matrix)
-            euler_angles = rotation.as_euler('xyz', degrees=True)  # roll, pitch, yaw
+            euler_angles = rotation.as_euler('xyz', degrees=True)
             
-            # Calculate confidence based on landmark visibility
             visibility_scores = [
                 landmarks[11].visibility, landmarks[12].visibility,
                 landmarks[23].visibility, landmarks[24].visibility
@@ -75,11 +61,10 @@ class MediaPipeFeatureExtractor:
             return np.array([euler_angles[0], euler_angles[1], euler_angles[2], confidence])
             
         except Exception as e:
-            # Return zero orientation with low confidence if calculation fails
             return np.array([0.0, 0.0, 0.0, 0.0])
     
     def extract_video_features(self, video_path):
-        """Extract 3D coordinates (x,y,z) + orientation (roll,pitch,yaw,conf) per frame"""
+        """Extract features per frame (no averaging)"""
         cap = cv2.VideoCapture(video_path)
         frame_features = []
         
@@ -88,20 +73,19 @@ class MediaPipeFeatureExtractor:
             if not ret:
                 break
             
-            # Convert BGR to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.pose.process(rgb_frame)
             
             if results.pose_landmarks:
-                # Extract 3D coordinates for 33 keypoints = 99 features
+                # Extract 3D coordinates for 33 keypoints
                 coords = []
                 for landmark in results.pose_landmarks.landmark:
                     coords.extend([landmark.x, landmark.y, landmark.z])
                 
-                # Extract orientation (roll, pitch, yaw, confidence) = 4 features
+                # Extract orientation
                 orientation = self.calculate_orientation_from_pose(results.pose_landmarks.landmark)
                 
-                # Combine: 99 + 4 = 103 features per frame
+                # 99 + 4 = 103 features per frame
                 frame_feature = coords + orientation.tolist()
                 frame_features.append(frame_feature)
         
@@ -109,8 +93,8 @@ class MediaPipeFeatureExtractor:
         return np.array(frame_features)
     
     def process_dataset(self, dataset_path):
-        """Process all videos and create CSV"""
-        dataset_path = dataset_path
+        """Process all videos and create CSV - same as before"""
+        dataset_path = Path(dataset_path)
         
         all_data = []
         exercise_to_id = {}
@@ -133,17 +117,14 @@ class MediaPipeFeatureExtractor:
             
             for i, video_file in enumerate(tqdm(video_files, desc=f"  {exercise_name} videos")):
                 try:
-                    # Extract features
                     features = self.extract_video_features(str(video_file))
                     
                     if len(features) == 0:
                         print(f"    Skipping {video_file.name}: No poses detected")
                         continue
                     
-                    # Create video ID as paper describes
                     video_id = f"{exercise_name}_{i+1:03d}"
                     
-                    # Add each frame as a row
                     for frame_idx, frame_coords in enumerate(features):
                         row = [video_id] + frame_coords.tolist() + [exercise_name]
                         all_data.append(row)
@@ -151,10 +132,10 @@ class MediaPipeFeatureExtractor:
                 except Exception as e:
                     print(f"    Error processing {video_file.name}: {e}")
         
-        columns = ['video_id'] + [f'kp_{i//3}_{["x","y","z"][i%3]}' for i in range(99)] + ['orientation_roll', 'orientation_pitch', 'orientation_yaw', 'orientation_confidence'] + ['class']
+        columns = ['video_id'] + [f'kp_{i//3}_{["x","y","z"][i%3]}' for i in range(99)] + \
+                  ['orientation_roll', 'orientation_pitch', 'orientation_yaw', 'orientation_confidence'] + ['class']
         df = pd.DataFrame(all_data, columns=columns)
         
-        # Save CSV
         csv_path = dataset_path / "processed" / "pose_features.csv"
         csv_path.parent.mkdir(exist_ok=True, parents=True)
         df.to_csv(csv_path, index=False)
@@ -164,63 +145,97 @@ class MediaPipeFeatureExtractor:
         
         return df, exercise_to_id
 
-class VideoGraphDataset(torch.utils.data.Dataset):
-    """Dataset that converts CSV pose data to graphs"""
+
+class TemporalWindowDataset(torch.utils.data.Dataset):
+    """
+    Dataset that creates temporal windows from pose sequences.
+    Each sample is a window of N consecutive frames.
+    """
     
-    def __init__(self, csv_path, exercise_to_label):
+    def __init__(self, csv_path, exercise_to_label, window_size=30, stride=15):
+        """
+        Args:
+            csv_path: Path to pose features CSV
+            exercise_to_label: Dictionary mapping exercise names to label indices
+            window_size: Number of frames per window (e.g., 30 frames = 1 second at 30fps)
+            stride: Number of frames to skip between windows (smaller = more overlap)
+        """
         self.csv_path = csv_path
         self.exercise_to_label = exercise_to_label
+        self.window_size = window_size
+        self.stride = stride
         
         # Load the CSV data
         self.df = pd.read_csv(csv_path)
         self.video_ids = self.df['video_id'].unique()
         
-        print(f"Loaded {len(self.video_ids)} unique videos")
+        # Create windows from all videos
+        self.windows = []
+        self._create_windows()
         
+        print(f"Created {len(self.windows)} windows from {len(self.video_ids)} videos")
+        print(f"Window size: {window_size} frames, Stride: {stride} frames")
+        
+    def _create_windows(self):
+        """Create sliding windows from each video"""
+        for video_id in self.video_ids:
+            # Get all frames for this video
+            video_frames = self.df[self.df['video_id'] == video_id]
+            
+            # Extract features and label
+            feature_cols = [col for col in self.df.columns if col not in ['video_id', 'class']]
+            pose_features = video_frames[feature_cols].values.astype(np.float32)
+            exercise_class = video_frames['class'].iloc[0]
+            label = self.exercise_to_label[exercise_class]
+            
+            # Create sliding windows
+            num_frames = len(pose_features)
+            
+            # If video is shorter than window_size, pad it
+            if num_frames < self.window_size:
+                # Pad by repeating the last frame
+                padding = np.repeat(pose_features[-1:], self.window_size - num_frames, axis=0)
+                pose_features = np.vstack([pose_features, padding])
+                num_frames = self.window_size
+            
+            # Create windows with stride
+            for start_idx in range(0, num_frames - self.window_size + 1, self.stride):
+                end_idx = start_idx + self.window_size
+                window = pose_features[start_idx:end_idx]
+                self.windows.append((window, label, video_id))
+    
     def __len__(self):
-        return len(self.video_ids)
+        return len(self.windows)
     
     def __getitem__(self, idx):
-        video_id = self.video_ids[idx]
+        window, label, video_id = self.windows[idx]
         
-        # Get all frames for this video
-        video_frames = self.df[self.df['video_id'] == video_id]
+        # Convert window to sequence of graphs
+        graphs = []
+        for frame_idx in range(self.window_size):
+            frame_features = window[frame_idx]
+            node_features, edge_index = self.create_pose_graph(frame_features)
+            
+            # Create graph for this frame
+            graph = Data(
+                x=node_features,
+                edge_index=edge_index
+            )
+            graphs.append(graph)
         
-        # Extract features (excluding video_id and class columns)
-        feature_cols = [col for col in self.df.columns if col not in ['video_id', 'class']]
-        pose_features = video_frames[feature_cols].values.astype(np.float32)
-        
-        # Get label
-        exercise_class = video_frames['class'].iloc[0]
-        label = self.exercise_to_label[exercise_class]
-        
-        # Convert to graph format
-        node_features, edge_index = self.create_pose_graph(pose_features)
-        
-        # Create PyTorch Geometric Data object
-        data = Data(
-            x=node_features,
-            edge_index=edge_index,
-            y=torch.tensor(label, dtype=torch.long)
-        )
-        
-        return data
+        return graphs, torch.tensor(label, dtype=torch.long), video_id
     
     def create_pose_graph(self, pose_features):
-        """Convert pose sequence to graph"""
-        # pose_features shape: [num_frames, 103]
+        """Convert single frame pose to graph"""
+        # pose_features shape: [103]
         
         # Extract coordinates (first 99 features: 33 keypoints × 3)
-        coords = pose_features[:, :99].reshape(-1, 33, 3)  # [frames, keypoints, xyz]
-        orientation = pose_features[:, 99:]  # [frames, 4] - orientation features
+        coords = pose_features[:99].reshape(33, 3)  # [keypoints, xyz]
+        orientation = pose_features[99:]  # [4] - orientation features
         
-        # Average across frames for single graph representation
-        avg_coords = coords.mean(axis=0)  # [33, 3]
-        avg_orientation = orientation.mean(axis=0)  # [4]
-        
-        # Each node gets coordinates + global orientation info
-        orientation_repeated = np.tile(avg_orientation, (33, 1))  # [33, 4]
-        node_features = np.concatenate([avg_coords, orientation_repeated], axis=1)  # [33, 7]
+        # Each node gets coordinates + orientation info
+        orientation_repeated = np.tile(orientation, (33, 1))  # [33, 4]
+        node_features = np.concatenate([coords, orientation_repeated], axis=1)  # [33, 7]
         
         # Create edges based on human pose skeleton
         edge_connections = [
@@ -241,34 +256,40 @@ class VideoGraphDataset(torch.utils.data.Dataset):
         # Convert to edge_index format (bidirectional)
         edges = []
         for src, dst in edge_connections:
-            if src < 33 and dst < 33:  # Valid keypoint indices
+            if src < 33 and dst < 33:
                 edges.append([src, dst])
-                edges.append([dst, src])  # Bidirectional
+                edges.append([dst, src])
         
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
         
         return torch.tensor(node_features, dtype=torch.float32), edge_index
 
-class ExerciseGNN(nn.Module):
-    """Graph Neural Network classfier"""
+
+class SpatialGNN(nn.Module):
+    """
+    STAGE 1: Spatial processing with GNN
+    Processes each frame independently to extract pose embeddings
+    """
     
-    def __init__(self, num_features=103, hidden_dim=128, num_classes=5):
+    def __init__(self, num_features=7, hidden_dim=128, output_dim=64):
         super().__init__()
         
         self.conv1 = GCNConv(num_features, hidden_dim)
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        self.conv3 = GCNConv(hidden_dim, hidden_dim)
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(hidden_dim // 2, num_classes)
-        )
+        self.conv3 = GCNConv(hidden_dim, output_dim)
         
         self.dropout = nn.Dropout(0.3)
         
     def forward(self, x, edge_index, batch=None):
+        """
+        Args:
+            x: Node features [num_nodes, 7]
+            edge_index: Edge connections [2, num_edges]
+            batch: Batch assignment for multiple graphs
+        
+        Returns:
+            Graph embedding [batch_size, output_dim] or [1, output_dim] for single graph
+        """
         # GCN layers with ReLU activation
         x = F.relu(self.conv1(x, edge_index))
         x = self.dropout(x)
@@ -278,29 +299,142 @@ class ExerciseGNN(nn.Module):
         
         x = self.conv3(x, edge_index)
         
-        # Global pooling (mean of all nodes in each graph)
+        # Global pooling (mean of all nodes)
         if batch is not None:
             x = global_mean_pool(x, batch)
         else:
-            # Single graph case
             x = x.mean(dim=0, keepdim=True)
-        
-        # Classification
-        x = self.classifier(x)
         
         return x
 
-class ExerciseTrainer:
-    """Training pipeline following paper's methodology"""
+
+class TemporalLSTM(nn.Module):
+    """
+    STAGE 2: Temporal processing with LSTM
+    Takes sequence of GNN embeddings and learns temporal patterns
+    """
+    
+    def __init__(self, input_dim=64, hidden_dim=128, num_layers=2, num_classes=5):
+        super().__init__()
+        
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=0.3 if num_layers > 1 else 0
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim // 2, num_classes)
+        )
+        
+    def forward(self, x):
+        """
+        Args:
+            x: Sequence of graph embeddings [batch_size, sequence_length, embedding_dim]
+        
+        Returns:
+            Class predictions [batch_size, num_classes]
+        """
+        # LSTM processes the sequence
+        lstm_out, (hidden, cell) = self.lstm(x)
+        
+        # Use the last hidden state for classification
+        # lstm_out shape: [batch_size, seq_len, hidden_dim]
+        # We take the last timestep
+        last_output = lstm_out[:, -1, :]  # [batch_size, hidden_dim]
+        
+        # Classification
+        output = self.classifier(last_output)
+        
+        return output
+
+
+class TemporalExerciseModel(nn.Module):
+    """
+    Complete two-stage model: GNN + LSTM
+    """
+    
+    def __init__(self, num_features=7, gnn_hidden=128, gnn_output=64, 
+                 lstm_hidden=128, lstm_layers=2, num_classes=5):
+        super().__init__()
+        
+        self.spatial_gnn = SpatialGNN(num_features, gnn_hidden, gnn_output)
+        self.temporal_lstm = TemporalLSTM(gnn_output, lstm_hidden, lstm_layers, num_classes)
+        
+    def forward(self, graph_sequence):
+        """
+        Args:
+            graph_sequence: List of graphs for one window
+                           Each graph has x, edge_index
+        
+        Returns:
+            Class predictions [batch_size, num_classes]
+        """
+        # STAGE 1: Process each graph with GNN to get embeddings
+        embeddings = []
+        for graph in graph_sequence:
+            # Process single graph
+            embedding = self.spatial_gnn(graph.x, graph.edge_index, graph.batch)
+            embeddings.append(embedding)
+        
+        # Stack embeddings into sequence
+        # embeddings: list of [batch_size, embedding_dim]
+        sequence = torch.stack(embeddings, dim=1)  # [batch_size, seq_len, embedding_dim]
+        
+        # STAGE 2: Process sequence with LSTM
+        output = self.temporal_lstm(sequence)
+        
+        return output
+
+
+def collate_temporal_batch(batch):
+    """
+    Custom collate function to handle batches of graph sequences
+    
+    Args:
+        batch: List of tuples (graphs, label, video_id)
+               where graphs is a list of Data objects
+    
+    Returns:
+        batched_sequences: List of batched graphs (one per timestep)
+        labels: Tensor of labels
+        video_ids: List of video IDs
+    """
+    sequences = [item[0] for item in batch]  # List of graph sequences
+    labels = torch.tensor([item[1] for item in batch], dtype=torch.long)
+    video_ids = [item[2] for item in batch]
+    
+    # Get sequence length (should be same for all)
+    seq_len = len(sequences[0])
+    
+    # Batch graphs at each timestep
+    batched_sequences = []
+    for t in range(seq_len):
+        # Get all graphs at timestep t
+        graphs_at_t = [seq[t] for seq in sequences]
+        # Batch them together
+        batched_graph = Batch.from_data_list(graphs_at_t)
+        batched_sequences.append(batched_graph)
+    
+    return batched_sequences, labels, video_ids
+
+
+class TemporalExerciseTrainer:
+    """Training pipeline for temporal model"""
     
     def __init__(self, dataset_path):
         self.dataset_path = Path(dataset_path)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-    def posing(self):
-        print("=== Exercise Recognition Training (Paper Method) ===\n")
+    def prepare_data(self, window_size=30, stride=15):
+        """Load or create dataset"""
+        print("=== Temporal Exercise Recognition Training ===\n")
         
-        # Step 1: Extract features using MediaPipe
         csv_path = self.dataset_path / "processed" / "pose_features.csv"
         
         if not csv_path.exists():
@@ -310,21 +444,20 @@ class ExerciseTrainer:
         else:
             print("Step 1: Loading existing pose features...")
             df = pd.read_csv(csv_path)
-            # Reconstruct exercise mapping
             exercise_names = df['class'].unique()
             exercise_to_label = {name: i for i, name in enumerate(exercise_names)}
         
-        print(f"Features extracted: {len(df)} frames")
+        print(f"Features loaded: {len(df)} frames")
         print(f"Exercises: {list(exercise_to_label.keys())}")
         
-        # Step 2: Create graph dataset
-        print("\nStep 2: Creating graph dataset...")
-        dataset = VideoGraphDataset(csv_path, exercise_to_label)
-        print(f"Created {len(dataset)} video graphs")
-        return dataset, exercise_to_label
+        # Create temporal window dataset
+        print(f"\nStep 2: Creating temporal window dataset...")
+        dataset = TemporalWindowDataset(csv_path, exercise_to_label, window_size, stride)
         
-    def split_dataset(self, dataset, test_size=0.2, random_state=42):
-         # Step 3: Train-test split
+        return dataset, exercise_to_label
+    
+    def split_dataset(self, dataset, test_size=0.2):
+        """Split into train and test"""
         train_size = int(0.8 * len(dataset))
         test_size = len(dataset) - train_size
         
@@ -333,22 +466,35 @@ class ExerciseTrainer:
             generator=torch.Generator().manual_seed(42)
         )
         
-        # Create data loaders
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+        # Create data loaders with custom collate
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, 
+            batch_size=16,  # Smaller batch size for temporal data
+            shuffle=True,
+            collate_fn=collate_temporal_batch
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, 
+            batch_size=16, 
+            shuffle=False,
+            collate_fn=collate_temporal_batch
+        )
         
-        print(f"Train videos: {len(train_dataset)}")
-        print(f"Test videos: {len(test_dataset)}")
+        print(f"Train windows: {len(train_dataset)}")
+        print(f"Test windows: {len(test_dataset)}")
         
-        return train_loader, test_loader, exercise_to_label
+        return train_loader, test_loader
     
-
-    def train(self, train_loader, test_loader, exercise_to_label):
-        # Step 4: Initialize model
-        print(f"\nStep 3: Initializing GNN model...")
-        model = ExerciseGNN(
-            num_features=7,  # 33 keypoints * 3 (x,y,z) + 4 orientation features (roll,pitch,yaw,confidence)
-            hidden_dim=128,
+    def train(self, train_loader, test_loader, exercise_to_label, epochs=100):
+        """Train the temporal model"""
+        print(f"\nStep 3: Initializing Temporal GNN+LSTM model...")
+        
+        model = TemporalExerciseModel(
+            num_features=7,
+            gnn_hidden=128,
+            gnn_output=64,
+            lstm_hidden=128,
+            lstm_layers=2,
             num_classes=len(exercise_to_label)
         ).to(self.device)
         
@@ -358,12 +504,11 @@ class ExerciseTrainer:
         print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         print(f"Training on: {self.device}")
         
-        # Step 5: Training loop 
+        # Training loop
         print("\nStep 4: Training model...")
-        epochs = 200  
-        
         train_losses = []
         train_accuracies = []
+        best_accuracy = 0.0
         
         for epoch in range(epochs):
             model.train()
@@ -371,13 +516,17 @@ class ExerciseTrainer:
             correct = 0
             total = 0
             
-            for batch in train_loader:
-                batch = batch.to(self.device)
+            progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs}')
+            for graph_sequences, labels, video_ids in progress_bar:
+                # Move graphs to device
+                graph_sequences = [g.to(self.device) for g in graph_sequences]
+                labels = labels.to(self.device)
+                
                 optimizer.zero_grad()
                 
                 # Forward pass
-                output = model(batch.x, batch.edge_index, batch.batch)
-                loss = criterion(output, batch.y)
+                output = model(graph_sequences)
+                loss = criterion(output, labels)
                 
                 # Backward pass
                 loss.backward()
@@ -386,8 +535,14 @@ class ExerciseTrainer:
                 # Statistics
                 total_loss += loss.item()
                 _, predicted = torch.max(output.data, 1)
-                total += batch.y.size(0)
-                correct += (predicted == batch.y).sum().item()
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+                
+                # Update progress bar
+                progress_bar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'acc': f'{100. * correct / total:.2f}%'
+                })
             
             avg_loss = total_loss / len(train_loader)
             accuracy = correct / total
@@ -395,22 +550,33 @@ class ExerciseTrainer:
             train_losses.append(avg_loss)
             train_accuracies.append(accuracy)
             
-            if epoch % 20 == 0 or epoch == epochs - 1:
-                print(f'Epoch {epoch:3d}/{epochs}: Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}')
+            print(f'Epoch {epoch+1}/{epochs}: Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}')
+            
+            # Save best model
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'exercise_to_label': exercise_to_label,
+                    'epoch': epoch,
+                    'accuracy': accuracy
+                }, self.dataset_path / "temporal_model_best.pth")
         
-        # Step 6: Evaluation
+        # Evaluation
         print("\nStep 5: Evaluating model...")
         model.eval()
         y_true = []
         y_pred = []
         
         with torch.no_grad():
-            for batch in test_loader:
-                batch = batch.to(self.device)
-                output = model(batch.x, batch.edge_index, batch.batch)
+            for graph_sequences, labels, video_ids in tqdm(test_loader, desc='Evaluating'):
+                graph_sequences = [g.to(self.device) for g in graph_sequences]
+                labels = labels.to(self.device)
+                
+                output = model(graph_sequences)
                 _, predicted = torch.max(output, 1)
                 
-                y_true.extend(batch.y.cpu().numpy())
+                y_true.extend(labels.cpu().numpy())
                 y_pred.extend(predicted.cpu().numpy())
         
         # Calculate metrics
@@ -426,72 +592,67 @@ class ExerciseTrainer:
         
         # Confusion matrix
         cm = confusion_matrix(y_true, y_pred)
-        plt.figure(figsize=(8, 6))
+        plt.figure(figsize=(10, 8))
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                    xticklabels=exercise_names, yticklabels=exercise_names)
-        plt.title('Confusion Matrix')
+        plt.title('Confusion Matrix - Temporal Model')
         plt.ylabel('True Label')
         plt.xlabel('Predicted Label')
         plt.tight_layout()
-        plt.savefig(self.dataset_path / 'confusion_matrix.png', dpi=300, bbox_inches='tight')
+        plt.savefig(self.dataset_path / 'confusion_matrix_temporal.png', dpi=300, bbox_inches='tight')
         plt.show()
         
-        # Save model
-        model_path = self.dataset_path / "exercise_gnn_model.pth"
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'exercise_to_label': exercise_to_label,
-            'test_accuracy': accuracy
-        }, model_path)
+        # Plot training curves
+        plt.figure(figsize=(12, 4))
         
-        print(f"\nModel saved to {model_path}")
-        print(f"Paper reproduction complete! Achieved {accuracy*100:.2f}% accuracy")
+        plt.subplot(1, 2, 1)
+        plt.plot(train_losses)
+        plt.title('Training Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        
+        plt.subplot(1, 2, 2)
+        plt.plot(train_accuracies)
+        plt.title('Training Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.grid(True)
+        
+        plt.tight_layout()
+        plt.savefig(self.dataset_path / 'training_curves_temporal.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        print(f"\nModel saved to {self.dataset_path / 'temporal_model_best.pth'}")
+        print(f"Training complete! Achieved {accuracy*100:.2f}% accuracy")
         
         return model, exercise_to_label, accuracy
 
 
 if __name__ == "__main__":
-    print("=== MediaPipe + GNN Exercise Recognition ===")
-    print("Following the exact methodology from the paper")
-    print("'MediaPipe with GNN for Human Activity Recognition'")
+    print("=== Temporal Exercise Recognition with GNN + LSTM ===")
+    print("Window-based prediction for real-time applications")
     
-    # Define the path to your exercise videos
+    # Set your dataset path
+    dataset_path = r"C:\Users\User\.cache\kagglehub\datasets\data\exercise-videos\real-time-exercise-recognition-dataset\versions\1.0.0\training-data"
     
-    rawpath = r"C:\Users\User\.cache\kagglehub\datasets\data\exercise-videos\real-time-exercise-recognition-dataset\versions\1.0.0\training-data"
-    path = Path(rawpath)
-    # Check for videos and collect exercise types
-    total_videos = 0
-    exercise_types = []
+    # Initialize trainer
+    trainer = TemporalExerciseTrainer(dataset_path)
     
-    print("\nScanning for exercise videos:")
-    for exercise_folder in path.iterdir():
-        if exercise_folder.is_dir():
-            # Count videos in this exercise folder
-            video_files = list(exercise_folder.glob("*.mp4"))
-            video_count = len(video_files)
-            
-            if video_count > 0:
-                total_videos += video_count
-                exercise_types.append(exercise_folder.name)
-                print(f"  {exercise_folder.name}: {video_count} videos")
-            else:
-                print(f"  {exercise_folder.name}: No MP4 videos found")
+    # Prepare data with 30-frame windows (1 second at 30fps)
+    dataset, exercise_to_label = trainer.prepare_data(window_size=30, stride=15)
     
-    print(f"\nFound {total_videos} total videos across {len(exercise_types)} exercise types:")
-    print(f"Exercise types: {', '.join(exercise_types)}")
-    print(f"\nStarting training on all videos...")
+    # Split data
+    train_loader, test_loader = trainer.split_dataset(dataset)
     
-    # Use the correct path for training - this should be the parent directory containing all exercise folders
-    trainer = ExerciseTrainer(rawpath) 
-    #dataset, exercise_to_label = trainer.posing()
-    csv_path = r"C:\Users\User\.cache\kagglehub\datasets\data\exercise-videos\real-time-exercise-recognition-dataset\versions\1.0.0\training-data\processed\pose_features.csv"
-    exercise_to_label = {"barbell biceps curl": 0, "hammer curl":1, "push-up": 2, "shoulder press":3, "squat":4}
-    dataset = VideoGraphDataset(csv_path, exercise_to_label)
-    train_loader, test_loader, exercise_to_label = trainer.split_dataset(dataset)
-    model, exercise_mapping, accuracy = trainer.train(train_loader, test_loader, exercise_to_label)
+    # Train model
+    model, exercise_mapping, accuracy = trainer.train(
+        train_loader, 
+        test_loader, 
+        exercise_to_label, 
+        epochs=50
+    )
     
     print(f"\nTraining completed!")
     print(f"Final accuracy: {accuracy*100:.2f}%")
     print(f"Exercise mapping: {exercise_mapping}")
-    print(f"Model saved for API usage")
-        
