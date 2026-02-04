@@ -1,4 +1,4 @@
-from mediapipe.python.solutions import pose as mp_pose
+import mediapipe as mp
 import cv2
 import numpy as np
 import torch
